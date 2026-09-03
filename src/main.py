@@ -2,11 +2,12 @@ from graph.osm_loader import load_manhattan_road_network
 from graph.road_network import RoadNetwork
 from graph.cost_calculator import CostCalculator
 from routing.route_engine import RouteEngine
+from disaster.flood_simulator import FloodSimulator
 
 
 def print_route_results(result, title):
     """
-    Print route information in a readable format.
+    Print route information.
     """
 
     print(f"\n{title}")
@@ -18,9 +19,20 @@ def print_route_results(result, title):
 
     metrics = result["metrics"]
 
-    print(f"Total dynamic cost: {result['total_cost']:.4f}")
-    print(f"Nodes in route: {len(result['nodes'])}")
-    print(f"Road segments: {metrics['road_count']}")
+    print(
+        f"Total dynamic cost: "
+        f"{result['total_cost']:.4f}"
+    )
+
+    print(
+        f"Nodes in route: "
+        f"{len(result['nodes'])}"
+    )
+
+    print(
+        f"Road segments: "
+        f"{metrics['road_count']}"
+    )
 
     print(
         f"Total distance: "
@@ -43,118 +55,19 @@ def print_route_results(result, title):
     )
 
 
-def test_dynamic_rerouting(
-    graph,
-    road_network,
-    route_engine,
-    start_node,
-    destination_node
-):
-    """
-    Test whether the routing engine finds an alternative
-    route after a road on the original route is blocked.
-    """
-
-    print("\nDYNAMIC REROUTING TEST")
-    print("=" * 50)
-
-    # Find original route
-    original_result = route_engine.find_route(
-        start_node,
-        destination_node
-    )
-
-    if original_result is None:
-        print("Could not find an initial route.")
-        return
-
-    print_route_results(
-        original_result,
-        "ORIGINAL ROUTE"
-    )
-
-    route_edges = original_result["edges"]
-
-    # Choose an edge roughly in the middle of the route
-    middle_index = len(route_edges) // 2
-
-    source, target, key = route_edges[middle_index]
-
-    edge_data = graph[source][target][key]
-
-    print("\nSIMULATING ROAD BLOCKAGE")
-    print("-" * 50)
-
-    print(
-        f"Blocking edge: "
-        f"{source} -> {target}"
-    )
-
-    print(
-        f"Road name: "
-        f"{edge_data.get('name', 'Unknown')}"
-    )
-
-    print(
-        f"Original edge cost: "
-        f"{edge_data.get('dynamic_cost', 0):.4f}"
-    )
-
-    # Block the exact edge used in the route
-    road_network.block_road(
-        source,
-        target,
-        key
-    )
-
-    # Find new route
-    new_result = route_engine.find_route(
-        start_node,
-        destination_node
-    )
-
-    print_route_results(
-        new_result,
-        "REROUTED PATH"
-    )
-
-    if new_result is None:
-        print(
-            "\nNo alternative route exists "
-            "after blocking this road."
-        )
-        return
-
-    # Verify blocked edge is not used
-    if (source, target, key) not in new_result["edges"]:
-
-        print("\nREROUTING VALIDATION")
-        print("-" * 50)
-        print(
-            "PASS: The routing engine successfully "
-            "avoided the blocked road."
-        )
-
-    else:
-        print(
-            "\nFAIL: The blocked road was still "
-            "included in the route."
-        )
-
-
 def main():
 
     print("\nDISASTER EVACUATION ROUTE OPTIMIZER")
-    print("=" * 50)
+    print("=" * 60)
 
     # --------------------------------------------------
-    # 1. Load Manhattan road network
+    # 1. Load road network
     # --------------------------------------------------
 
     graph = load_manhattan_road_network()
 
     print("\nROAD NETWORK")
-    print("-" * 50)
+    print("-" * 60)
 
     print(
         f"Intersections: "
@@ -167,7 +80,7 @@ def main():
     )
 
     # --------------------------------------------------
-    # 2. Initialize disaster-aware road network
+    # 2. Initialize disaster-aware graph
     # --------------------------------------------------
 
     cost_calculator = CostCalculator()
@@ -178,14 +91,13 @@ def main():
     )
 
     print(
-        "\nInitializing disaster-aware "
-        "road attributes..."
+        "\nInitializing road attributes..."
     )
 
     road_network.initialize_edge_attributes()
 
     print(
-        "Calculating dynamic road costs..."
+        "Calculating dynamic costs..."
     )
 
     road_network.calculate_dynamic_costs()
@@ -200,7 +112,15 @@ def main():
     )
 
     # --------------------------------------------------
-    # 4. Select start and destination
+    # 4. Create flood simulator
+    # --------------------------------------------------
+
+    flood_simulator = FloodSimulator(
+        road_network
+    )
+
+    # --------------------------------------------------
+    # 5. Select routing scenario
     # --------------------------------------------------
 
     nodes = list(graph.nodes())
@@ -209,40 +129,162 @@ def main():
 
     destination_node = nodes[-1]
 
-    print("\nROUTING SCENARIO")
-    print("-" * 50)
+    print("\nEVACUATION SCENARIO")
+    print("-" * 60)
 
-    print(f"Start node: {start_node}")
+    print(
+        f"Start node: {start_node}"
+    )
+
     print(
         f"Destination node: "
         f"{destination_node}"
     )
 
     # --------------------------------------------------
-    # 5. Find normal evacuation route
+    # 6. Find normal route
     # --------------------------------------------------
 
-    result = route_engine.find_route(
+    normal_route = route_engine.find_route(
         start_node,
         destination_node
     )
 
     print_route_results(
-        result,
-        "SAFE EVACUATION ROUTE"
+        normal_route,
+        "NORMAL ROUTE (NO DISASTER)"
     )
 
     # --------------------------------------------------
-    # 6. Test dynamic rerouting
+    # 7. Create flood event
     # --------------------------------------------------
 
-    test_dynamic_rerouting(
-        graph,
-        road_network,
-        route_engine,
+    # Choose the midpoint node from the normal route
+    # as the flood center so the disaster is guaranteed
+    # to affect the evacuation path.
+
+    route_nodes = normal_route["nodes"]
+
+    flood_node = route_nodes[
+        len(route_nodes) // 2
+    ]
+
+    flood_node_data = graph.nodes[flood_node]
+
+    flood_latitude = flood_node_data["y"]
+    flood_longitude = flood_node_data["x"]
+
+    print("\nSIMULATING FLOOD EVENT")
+    print("-" * 60)
+
+    print(
+        f"Flood center node: {flood_node}"
+    )
+
+    print(
+        f"Latitude: {flood_latitude}"
+    )
+
+    print(
+        f"Longitude: {flood_longitude}"
+    )
+
+    # --------------------------------------------------
+    # 8. Apply flood
+    # --------------------------------------------------
+
+    flood_result = flood_simulator.simulate_flood(
+        center_latitude=flood_latitude,
+        center_longitude=flood_longitude,
+
+        # Roads within 500m are affected
+        affected_radius=500,
+
+        # Roads within 150m are severely flooded
+        severe_radius=150
+    )
+
+    print("\nFLOOD IMPACT")
+    print("-" * 60)
+
+    print(
+        f"Affected roads: "
+        f"{flood_result['affected_roads']}"
+    )
+
+    print(
+        f"Blocked roads: "
+        f"{flood_result['blocked_roads']}"
+    )
+
+    # --------------------------------------------------
+    # 9. Find disaster-aware route
+    # --------------------------------------------------
+
+    disaster_route = route_engine.find_route(
         start_node,
         destination_node
     )
+
+    print_route_results(
+        disaster_route,
+        "DISASTER-AWARE EVACUATION ROUTE"
+    )
+
+    # --------------------------------------------------
+    # 10. Compare routes
+    # --------------------------------------------------
+
+    if disaster_route is not None:
+
+        normal_metrics = normal_route["metrics"]
+
+        disaster_metrics = disaster_route[
+            "metrics"
+        ]
+
+        print("\nROUTE COMPARISON")
+        print("=" * 60)
+
+        distance_difference = (
+            disaster_metrics["total_distance"]
+            - normal_metrics["total_distance"]
+        )
+
+        time_difference = (
+            disaster_metrics["total_travel_time"]
+            - normal_metrics["total_travel_time"]
+        )
+
+        cost_difference = (
+            disaster_route["total_cost"]
+            - normal_route["total_cost"]
+        )
+
+        print(
+            f"Distance difference: "
+            f"{distance_difference:.2f} meters"
+        )
+
+        print(
+            f"Travel time difference: "
+            f"{time_difference:.2f} seconds"
+        )
+
+        print(
+            f"Cost difference: "
+            f"{cost_difference:.4f}"
+        )
+
+        print(
+            f"\nNormal route risk: "
+            f"{normal_metrics['average_risk']:.3f}"
+        )
+
+        print(
+            f"Evacuation route risk: "
+            f"{disaster_metrics['average_risk']:.3f}"
+        )
 
 
 if __name__ == "__main__":
