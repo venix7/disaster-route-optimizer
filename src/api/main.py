@@ -12,6 +12,28 @@ from services.evacuation_service import (
     EvacuationService
 )
 
+from api.schemas import (
+    RouteRequest,
+    FloodRequest,
+    ShelterCreateRequest,
+    ShelterRouteRequest
+)
+
+from database.init_db import (
+    initialize_database
+)
+
+from database.seed_data import (
+    seed_shelters
+)
+
+from services.shelter_service import (
+    ShelterService
+)
+
+from database.connection import SessionLocal
+from database.models import RouteHistory
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -24,9 +46,16 @@ async def lifespan(app: FastAPI):
         "\nStarting Disaster Evacuation Route Optimizer API..."
     )
 
+    initialize_database()
+    seed_shelters()
+
+    print("Initializing evacuation service...")
+
     app.state.evacuation_service = (
         EvacuationService()
     )
+
+    print("Evacuation service ready.")
 
     yield
 
@@ -121,7 +150,49 @@ def find_evacuation_route(
             detail="No evacuation route found."
         )
 
+    service.save_route_history(
+        start_latitude=request.start_latitude,
+        start_longitude=request.start_longitude,
+        destination_latitude=(
+            request.destination_latitude
+        ),
+        destination_longitude=(
+            request.destination_longitude
+        ),
+        route_result=result
+    )
+
     return result
+
+@app.get("/routes/history")
+def get_route_history():
+
+    db = SessionLocal()
+
+    try:
+        routes = (
+            db.query(RouteHistory)
+            .order_by(RouteHistory.created_at.desc())
+            .limit(20)
+            .all()
+        )
+
+        return {
+            "routes": [
+                {
+                    "id": route.id,
+                    "total_distance": route.total_distance,
+                    "total_travel_time": route.total_travel_time,
+                    "average_risk": route.average_risk,
+                    "total_cost": route.total_cost,
+                    "created_at": route.created_at
+                }
+                for route in routes
+            ]
+        }
+
+    finally:
+        db.close()
 
 
 # --------------------------------------------------
@@ -179,3 +250,65 @@ def reset_disaster():
     service = app.state.evacuation_service
 
     return service.reset_disaster()
+
+@app.get("/shelters")
+def get_shelters():
+
+    shelter_service = ShelterService()
+
+    shelters = (
+        shelter_service.get_all_shelters()
+    )
+
+    return {
+        "shelters": shelters
+    }
+
+@app.post("/shelters")
+def create_shelter(
+    request: ShelterCreateRequest
+):
+
+    shelter_service = ShelterService()
+
+    shelter = (
+        shelter_service.create_shelter(
+            name=request.name,
+            latitude=request.latitude,
+            longitude=request.longitude,
+            capacity=request.capacity
+        )
+    )
+
+    return {
+        "message": (
+            "Shelter created successfully."
+        ),
+        "shelter_id": shelter.id
+    }
+
+@app.post("/evacuation/best-shelter")
+def find_best_shelter(
+    request: ShelterRouteRequest
+):
+
+    service = app.state.evacuation_service
+
+    result = (
+        service.find_best_shelter(
+            request.start_latitude,
+            request.start_longitude
+        )
+    )
+
+    if result is None:
+
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "No reachable evacuation "
+                "shelter found."
+            )
+        )
+
+    return result

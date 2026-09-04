@@ -3,6 +3,9 @@ from graph.road_network import RoadNetwork
 from graph.cost_calculator import CostCalculator
 from routing.route_engine import RouteEngine
 from disaster.flood_simulator import FloodSimulator
+from services.shelter_service import ShelterService
+from database.connection import SessionLocal
+from database.models import RouteHistory
 
 
 class EvacuationService:
@@ -123,3 +126,127 @@ class EvacuationService:
                 "Disaster conditions reset successfully."
             )
         }
+
+    def find_best_shelter(
+        self,
+        start_latitude,
+        start_longitude
+    ):
+        """
+        Evaluate routes to all available shelters
+        and select the shelter with the lowest
+        evacuation cost.
+        """
+
+        shelter_service = ShelterService()
+
+        shelters = (
+            shelter_service.get_all_shelters()
+        )
+
+        best_result = None
+
+        evaluated_shelters = []
+
+        for shelter in shelters:
+
+            route_result = (
+                self.route_engine
+                .find_route_by_coordinates(
+                    start_latitude,
+                    start_longitude,
+                    shelter["latitude"],
+                    shelter["longitude"]
+                )
+            )
+
+            if route_result is None:
+                continue
+
+            shelter_result = {
+                "shelter": shelter,
+                "route": route_result
+            }
+
+            evaluated_shelters.append(
+                shelter_result
+            )
+
+            if (
+                best_result is None
+                or route_result["total_cost"]
+                < best_result["route"]["total_cost"]
+            ):
+
+                best_result = shelter_result
+
+        if best_result is None:
+
+            return None
+
+        return {
+            "recommended_shelter": (
+                best_result
+            ),
+            "evaluated_shelters": (
+                evaluated_shelters
+            )
+        }
+
+    def save_route_history(
+        self,
+        start_latitude,
+        start_longitude,
+        destination_latitude,
+        destination_longitude,
+        route_result
+    ):
+        """
+        Save calculated route information
+        to PostgreSQL.
+        """
+
+        db = SessionLocal()
+
+        try:
+
+            metrics = (
+                route_result["metrics"]
+            )
+
+            route_history = RouteHistory(
+                start_latitude=start_latitude,
+                start_longitude=start_longitude,
+                destination_latitude=(
+                    destination_latitude
+                ),
+                destination_longitude=(
+                    destination_longitude
+                ),
+                total_distance=(
+                    metrics["total_distance"]
+                ),
+                total_travel_time=(
+                    metrics["total_travel_time"]
+                ),
+                average_risk=(
+                    metrics["average_risk"]
+                ),
+                total_cost=(
+                    route_result["total_cost"]
+                )
+            )
+
+            db.add(route_history)
+
+            db.commit()
+
+        except Exception:
+
+            db.rollback()
+
+            raise
+
+        finally:
+
+            db.close()

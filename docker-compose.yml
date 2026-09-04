@@ -1,0 +1,19 @@
+services:
+  database:
+    image: postgis/postgis:16-3.4
+
+    container_name: evacuation_postgres
+
+    environment:
+      POSTGRES_USER: evacuation_user
+      POSTGRES_PASSWORD: evacuation_password
+      POSTGRES_DB: evacuation_db
+
+    ports:
+      - "5433:5432"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
