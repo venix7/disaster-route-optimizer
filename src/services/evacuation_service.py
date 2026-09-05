@@ -75,6 +75,35 @@ class EvacuationService:
             )
         }
 
+    def _add_route_coordinates(
+        self,
+        route_result
+    ):
+        """
+        Add latitude and longitude coordinates
+        for each node in the calculated route.
+        """
+
+        if route_result is None:
+            return None
+
+        coordinates = []
+
+        for node in route_result["nodes"]:
+
+            node_data = self.graph.nodes[node]
+
+            coordinates.append(
+                {
+                    "latitude": node_data["y"],
+                    "longitude": node_data["x"]
+                }
+            )
+
+        route_result["coordinates"] = coordinates
+
+        return route_result
+    
     def find_route(
         self,
         start_latitude,
@@ -86,7 +115,7 @@ class EvacuationService:
         Find an evacuation route using geographic coordinates.
         """
 
-        return (
+        route_result = (
             self.route_engine
             .find_route_by_coordinates(
                 start_latitude,
@@ -94,6 +123,10 @@ class EvacuationService:
                 destination_latitude,
                 destination_longitude
             )
+        )
+
+        return self._add_route_coordinates(
+            route_result
         )
 
     def simulate_flood(
@@ -158,6 +191,10 @@ class EvacuationService:
                     shelter["latitude"],
                     shelter["longitude"]
                 )
+            )
+
+            route_result = self._add_route_coordinates(
+                route_result
             )
 
             if route_result is None:

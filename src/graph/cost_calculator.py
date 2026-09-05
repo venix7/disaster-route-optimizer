@@ -1,15 +1,23 @@
 class CostCalculator:
     def __init__(
         self,
-        distance_weight=0.2,
-        time_weight=0.2,
-        traffic_weight=0.1,
-        risk_weight=0.5
+        distance_weight=0.30,
+        time_weight=0.25,
+        traffic_weight=0.10,
+        risk_weight=0.35
     ):
+        """
+        Initialize weights for evacuation route cost.
+
+        Risk is given slightly higher priority than
+        distance and travel time.
+        """
+
         self.distance_weight = distance_weight
         self.time_weight = time_weight
         self.traffic_weight = traffic_weight
         self.risk_weight = risk_weight
+
 
     def calculate_cost(
         self,
@@ -19,7 +27,8 @@ class CostCalculator:
         risk_level
     ):
         """
-        Calculate the dynamic evacuation cost of a road segment.
+        Calculate the dynamic evacuation cost
+        of a road segment.
         """
 
         cost = (
@@ -30,6 +39,7 @@ class CostCalculator:
         )
 
         return cost
+
 
     @staticmethod
     def normalize(value, max_value):

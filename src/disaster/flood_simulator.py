@@ -57,9 +57,14 @@ class FloodSimulator:
 
         Roads inside the severe radius are blocked.
 
-        Roads inside the affected radius receive a risk level
-        based on their distance from the flood center.
+        Roads inside the affected radius receive an
+        increasing risk level based on proximity to
+        the flood center.
         """
+
+        # Reset previous disaster state before
+        # applying a new flood simulation
+        self.reset_disaster()
 
         affected_roads = 0
         blocked_roads = 0
@@ -78,22 +83,30 @@ class FloodSimulator:
             target_lat = target_data["y"]
             target_lon = target_data["x"]
 
-            midpoint_lat = (
-                source_lat + target_lat
-            ) / 2
-
-            midpoint_lon = (
-                source_lon + target_lon
-            ) / 2
-
-            distance = self.calculate_distance(
-                midpoint_lat,
-                midpoint_lon,
+            # Calculate distance from flood center
+            # to both ends of the road segment
+            source_distance = self.calculate_distance(
+                source_lat,
+                source_lon,
                 center_latitude,
                 center_longitude
             )
 
-            # Outside flood zone
+            target_distance = self.calculate_distance(
+                target_lat,
+                target_lon,
+                center_latitude,
+                center_longitude
+            )
+
+            # Use the closest endpoint as the road's
+            # approximate distance from the flood
+            distance = min(
+                source_distance,
+                target_distance
+            )
+
+            # Road is outside affected area
             if distance > affected_radius:
                 continue
 
@@ -112,26 +125,17 @@ class FloodSimulator:
 
             else:
 
-                # Risk increases closer to flood center
-                calculated_risk = (
-                    1
-                    - distance / affected_radius
-                )
-
-                calculated_risk = max(
-                    0.1,
-                    calculated_risk
-                )
-
-                # Preserve higher risk from previous events
-                current_risk = edge_data.get(
-                    "risk_level",
-                    0.0
+                # Normalize flood risk between
+                # severe radius and affected radius
+                risk_level = (
+                    affected_radius - distance
+                ) / (
+                    affected_radius - severe_radius
                 )
 
                 risk_level = max(
-                    current_risk,
-                    calculated_risk
+                    0.0,
+                    min(1.0, risk_level)
                 )
 
                 self.road_network.update_road_risk(
@@ -163,6 +167,7 @@ class FloodSimulator:
         ):
 
             edge_data["risk_level"] = 0.0
+
             edge_data["blocked"] = False
 
             self.road_network.recalculate_road_cost(
