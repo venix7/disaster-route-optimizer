@@ -17,9 +17,9 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# Geographic data / generated graph files
-data/
-*.graphml
+# Ignore other generated data, but keep the application road network
+data/*
+!data/manhattan_graph.graphml
 
 # Frontend generated files
 frontend/node_modules/
