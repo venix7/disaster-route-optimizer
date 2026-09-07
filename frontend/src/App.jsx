@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import "./App.css";
 import MapView from "./components/MapView";
+import AssistantChat from "./components/AssistantChat";
 import {
   getShelters,
   findRoute,
@@ -9,10 +10,53 @@ import {
   resetDisaster,
 } from "./services/api";
 
+
+const compactRouteForAssistant = (route) => {
+  if (!route?.metrics) {
+    return null;
+  }
+
+  return {
+    nodes: route.nodes || [],
+    edges: route.edges || [],
+    total_cost: route.total_cost,
+    metrics: route.metrics,
+    analysis: route.analysis || null,
+  };
+};
+
+
+const compactRecommendationForAssistant = (recommendation) => {
+  if (!recommendation) {
+    return null;
+  }
+
+  const compactItem = (item) => {
+    if (!item?.shelter || !item?.route?.metrics) {
+      return null;
+    }
+
+    return {
+      shelter: item.shelter,
+      route: compactRouteForAssistant(item.route),
+    };
+  };
+
+  return {
+    recommended_shelter: compactItem(recommendation.recommended_shelter),
+    evaluated_shelters: (recommendation.evaluated_shelters || [])
+      .map(compactItem)
+      .filter(Boolean),
+    analysis: recommendation.analysis || null,
+  };
+};
+
+
 function App() {
   const [shelters, setShelters] = useState([]);
   const [route, setRoute] = useState(null);
   const [recommendedShelter, setRecommendedShelter] = useState(null);
+  const [shelterRecommendation, setShelterRecommendation] = useState(null);
 
   // Selected route locations
   const [startLatitude, setStartLatitude] = useState("");
@@ -36,7 +80,7 @@ function App() {
     const loadShelters = async () => {
       try {
         const data = await getShelters();
-        setShelters(data.shelters || []);
+        setShelters(data || []);
       } catch (error) {
         console.error("Failed to load shelters:", error);
       }
@@ -62,6 +106,7 @@ function App() {
       setLoading(true);
       setError(null);
       setRecommendedShelter(null);
+      setShelterRecommendation(null);
 
       const data = await findRoute(
         parseFloat(startLatitude),
@@ -109,6 +154,7 @@ function App() {
 
       setRoute(bestResult.route);
       setRecommendedShelter(bestResult.shelter);
+      setShelterRecommendation(data);
     } catch (error) {
       console.error(error);
 
@@ -134,18 +180,23 @@ function App() {
       setLoading(true);
       setError(null);
 
-      await simulateFlood(
+      const data = await simulateFlood(
         parseFloat(floodLatitude),
         parseFloat(floodLongitude),
         parseFloat(affectedRadius),
         parseFloat(severeRadius)
       );
 
+      const floodImpact = data.flood_impact || {};
+
       setFloodData({
         latitude: parseFloat(floodLatitude),
         longitude: parseFloat(floodLongitude),
         affectedRadius: parseFloat(affectedRadius),
         severeRadius: parseFloat(severeRadius),
+        affectedRoads: floodImpact.affected_roads ?? null,
+        blockedRoads: floodImpact.blocked_roads ?? null,
+        stateVersion: floodImpact.state_version ?? null,
       });
 
       setDisasterActive(true);
@@ -168,6 +219,7 @@ function App() {
       setFloodData(null);
       setRoute(null);
       setRecommendedShelter(null);
+      setShelterRecommendation(null);
       setFloodLatitude("");
       setFloodLongitude("");
     } catch (error) {
@@ -182,6 +234,7 @@ function App() {
     if (mode === "start") {
       setStartLatitude(latitude.toString());
       setStartLongitude(longitude.toString());
+      setShelterRecommendation(null);
       setSelectionMode("destination");
     } else if (mode === "destination") {
       setDestinationLatitude(latitude.toString());
@@ -192,6 +245,60 @@ function App() {
       setFloodLongitude(longitude.toString());
       setSelectionMode(null);
     }
+  };
+
+  const handleAssistantAction = (action) => {
+    if (action.type === "route_calculated") {
+      setRoute(action.payload);
+      setRecommendedShelter(null);
+      setShelterRecommendation(null);
+      setError(null);
+    }
+
+    if (action.type === "shelter_recommended") {
+      const recommendation = action.payload;
+      const bestResult = recommendation?.recommended_shelter;
+
+      if (bestResult?.route && bestResult?.shelter) {
+        setRoute(bestResult.route);
+        setRecommendedShelter(bestResult.shelter);
+        setShelterRecommendation(recommendation);
+        setError(null);
+      }
+    }
+  };
+
+  const assistantContext = {
+    start_location:
+      startLatitude && startLongitude
+        ? {
+            latitude: parseFloat(startLatitude),
+            longitude: parseFloat(startLongitude),
+          }
+        : null,
+    destination_location:
+      destinationLatitude && destinationLongitude
+        ? {
+            latitude: parseFloat(destinationLatitude),
+            longitude: parseFloat(destinationLongitude),
+          }
+        : null,
+    route: compactRouteForAssistant(route),
+    shelter_recommendation: compactRecommendationForAssistant(shelterRecommendation),
+    flood: {
+      active: disasterActive,
+      center: floodData
+        ? {
+            latitude: floodData.latitude,
+            longitude: floodData.longitude,
+          }
+        : null,
+      affected_radius: floodData?.affectedRadius ?? null,
+      severe_radius: floodData?.severeRadius ?? null,
+      affected_roads: floodData?.affectedRoads ?? null,
+      blocked_roads: floodData?.blockedRoads ?? null,
+      state_version: floodData?.stateVersion ?? null,
+    },
   };
 
   return (
@@ -231,6 +338,7 @@ function App() {
               onClick={() => {
                 setRoute(null);
                 setRecommendedShelter(null);
+                setShelterRecommendation(null);
                 setDestinationLatitude("");
                 setDestinationLongitude("");
                 setSelectionMode("start");
@@ -444,6 +552,8 @@ function App() {
             )}
           </section>
         )}
+
+        <AssistantChat context={assistantContext} onAction={handleAssistantAction} />
       </main>
     </div>
   );

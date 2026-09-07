@@ -5,6 +5,8 @@ class FloodSimulator:
     def __init__(self, road_network):
         self.road_network = road_network
         self.graph = road_network.graph
+        self.current_flood = None
+        self.state_version = 0
 
     @staticmethod
     def calculate_distance(
@@ -62,9 +64,10 @@ class FloodSimulator:
         the flood center.
         """
 
-        # Reset previous disaster state before
-        # applying a new flood simulation
-        self.reset_disaster()
+        # Clear previous road mutations before applying
+        # the new event. This private reset avoids counting
+        # one simulation as two state changes.
+        self._clear_road_conditions()
 
         affected_roads = 0
         blocked_roads = 0
@@ -145,7 +148,10 @@ class FloodSimulator:
                     risk_level
                 )
 
-        return {
+        self.state_version += 1
+
+        result = {
+            "active": True,
             "affected_roads": affected_roads,
             "blocked_roads": blocked_roads,
             "center": (
@@ -153,12 +159,98 @@ class FloodSimulator:
                 center_longitude
             ),
             "affected_radius": affected_radius,
-            "severe_radius": severe_radius
+            "severe_radius": severe_radius,
+            "state_version": self.state_version
         }
+
+        self.current_flood = result.copy()
+
+        return result
 
     def reset_disaster(self):
         """
         Reset all disaster-related road conditions.
+        """
+
+        self._clear_road_conditions()
+
+        self.current_flood = None
+        self.state_version += 1
+
+    def get_hazard_status(self):
+        """
+        Return deterministic information about the live graph state.
+        """
+
+        blocked_roads = 0
+        risky_roads = 0
+        maximum_risk = 0.0
+
+        for _, _, _, edge_data in self.graph.edges(
+            keys=True,
+            data=True
+        ):
+
+            risk_level = float(
+                edge_data.get(
+                    "risk_level",
+                    0.0
+                )
+            )
+
+            if edge_data.get("blocked", False):
+                blocked_roads += 1
+
+            if risk_level > 0:
+                risky_roads += 1
+
+            maximum_risk = max(
+                maximum_risk,
+                risk_level
+            )
+
+        if self.current_flood is None:
+
+            return {
+                "active": False,
+                "center": None,
+                "affected_radius": None,
+                "severe_radius": None,
+                "affected_roads": 0,
+                "blocked_roads": blocked_roads,
+                "risky_roads": risky_roads,
+                "maximum_risk": maximum_risk,
+                "state_version": self.state_version
+            }
+
+        center_latitude, center_longitude = (
+            self.current_flood["center"]
+        )
+
+        return {
+            "active": True,
+            "center": {
+                "latitude": center_latitude,
+                "longitude": center_longitude
+            },
+            "affected_radius": self.current_flood[
+                "affected_radius"
+            ],
+            "severe_radius": self.current_flood[
+                "severe_radius"
+            ],
+            "affected_roads": self.current_flood[
+                "affected_roads"
+            ],
+            "blocked_roads": blocked_roads,
+            "risky_roads": risky_roads,
+            "maximum_risk": maximum_risk,
+            "state_version": self.state_version
+        }
+
+    def _clear_road_conditions(self):
+        """
+        Clear edge mutations without changing event metadata.
         """
 
         for source, target, key, edge_data in self.graph.edges(

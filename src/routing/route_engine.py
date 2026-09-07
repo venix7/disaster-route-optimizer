@@ -18,13 +18,19 @@ class RouteEngine:
     def find_route(
         self,
         start_node,
-        destination_node
+        destination_node,
+        cost_attribute="dynamic_cost",
+        allow_blocked=False
     ):
         """
         Find the lowest-cost route using Dijkstra's algorithm.
 
-        Blocked roads are ignored.
-        Dynamic road cost is used as the edge weight.
+        Dynamic road cost is used by default. The optional
+        cost attribute is used by deterministic route analysis
+        to compare the selected route with distance-only routes.
+
+        Blocked roads are ignored unless an analysis explicitly
+        asks to inspect the road network without closures.
         """
 
         # Handle same start and destination node
@@ -132,10 +138,13 @@ class RouteEngine:
                     edge_dict.items()
                 ):
 
-                    # Ignore blocked roads
-                    if edge_data.get(
-                        "blocked",
-                        False
+                    # Ignore blocked roads during normal routing
+                    if (
+                        not allow_blocked
+                        and edge_data.get(
+                            "blocked",
+                            False
+                        )
                     ):
 
                         continue
@@ -143,9 +152,26 @@ class RouteEngine:
 
                     edge_cost = (
                         edge_data.get(
-                            "dynamic_cost"
+                            cost_attribute
                         )
                     )
+
+
+                    # GraphML values should already be numeric
+                    # after OSMnx loads the graph, but converting
+                    # here keeps analysis routes defensive.
+                    try:
+
+                        edge_cost = float(
+                            edge_cost
+                        )
+
+                    except (
+                        TypeError,
+                        ValueError
+                    ):
+
+                        continue
 
 
                     # Ignore invalid costs

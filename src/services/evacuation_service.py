@@ -4,6 +4,9 @@ from graph.cost_calculator import CostCalculator
 from routing.route_engine import RouteEngine
 from disaster.flood_simulator import FloodSimulator
 from services.shelter_service import ShelterService
+from services.route_analysis_service import (
+    RouteAnalysisService
+)
 from database.connection import SessionLocal
 from database.models import RouteHistory
 
@@ -55,6 +58,17 @@ class EvacuationService:
         # Initialize disaster simulator
         self.flood_simulator = FloodSimulator(
             self.road_network
+        )
+
+        # Deterministic facts used by the natural-language
+        # assistant. This service reads the same live graph
+        # and never replaces the routing algorithm.
+        self.route_analysis_service = (
+            RouteAnalysisService(
+                self.graph,
+                self.road_network,
+                self.route_engine
+            )
         )
 
         print(
@@ -125,7 +139,11 @@ class EvacuationService:
             )
         )
 
-        return self._add_route_coordinates(
+        route_result = self._add_route_coordinates(
+            route_result
+        )
+
+        return self._add_route_analysis(
             route_result
         )
 
@@ -160,6 +178,13 @@ class EvacuationService:
             )
         }
 
+    def get_hazard_status(self):
+        """
+        Return the current deterministic flood and road state.
+        """
+
+        return self.flood_simulator.get_hazard_status()
+
     def find_best_shelter(
         self,
         start_latitude,
@@ -182,6 +207,14 @@ class EvacuationService:
         evaluated_shelters = []
 
         for shelter in shelters:
+
+            # An active shelter with no remaining space is not
+            # an available evacuation destination.
+            if shelter.get(
+                "available_capacity",
+                0
+            ) <= 0:
+                continue
 
             route_result = (
                 self.route_engine
@@ -221,7 +254,13 @@ class EvacuationService:
 
             return None
 
-        return {
+        best_result["route"] = (
+            self._add_route_analysis(
+                best_result["route"]
+            )
+        )
+
+        recommendation_result = {
             "recommended_shelter": (
                 best_result
             ),
@@ -229,6 +268,39 @@ class EvacuationService:
                 evaluated_shelters
             )
         }
+
+        recommendation_result["analysis"] = (
+            self.route_analysis_service
+            .analyze_shelter_recommendation(
+                recommendation_result
+            )
+        )
+
+        return recommendation_result
+
+    def _add_route_analysis(
+        self,
+        route_result
+    ):
+        """
+        Attach an explainability snapshot at calculation time.
+
+        Keeping this snapshot with the route prevents a later
+        flood update from silently changing the facts used to
+        explain why the displayed route was selected.
+        """
+
+        if route_result is None:
+            return None
+
+        route_result["analysis"] = (
+            self.route_analysis_service.analyze_route(
+                route_result,
+                self.get_hazard_status()
+            )
+        )
+
+        return route_result
 
     def save_route_history(
         self,
