@@ -5,18 +5,15 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.schemas import (
     RouteRequest,
-    FloodRequest
+    FloodRequest,
+    ShelterCreateRequest,
+    ShelterRouteRequest,
+    AssistantChatRequest,
+    AssistantChatResponse
 )
 
 from services.evacuation_service import (
     EvacuationService
-)
-
-from api.schemas import (
-    RouteRequest,
-    FloodRequest,
-    ShelterCreateRequest,
-    ShelterRouteRequest
 )
 
 from database.init_db import (
@@ -33,8 +30,13 @@ from services.shelter_service import (
 
 from database.connection import SessionLocal
 from database.models import RouteHistory
-
-from fastapi.middleware.cors import CORSMiddleware
+from llm.assistant_service import (
+    AssistantService,
+    AssistantServiceError
+)
+from llm.config import (
+    AssistantConfigurationError
+)
 
 
 @asynccontextmanager
@@ -55,6 +57,12 @@ async def lifespan(app: FastAPI):
 
     app.state.evacuation_service = (
         EvacuationService()
+    )
+
+    app.state.assistant_service = (
+        AssistantService(
+            app.state.evacuation_service
+        )
     )
 
     print("Evacuation service ready.")
@@ -316,3 +324,71 @@ def find_best_shelter(
         )
 
     return result
+
+
+# --------------------------------------------------
+# Natural-Language Assistant
+# --------------------------------------------------
+
+@app.post(
+    "/assistant/chat",
+    response_model=AssistantChatResponse
+)
+def assistant_chat(
+    request: AssistantChatRequest
+):
+    """
+    Let Groq select deterministic evacuation tools and
+    explain their structured results.
+    """
+
+    assistant_service = (
+        app.state.assistant_service
+    )
+
+    if not assistant_service.is_configured:
+
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The assistant is not configured. "
+                "Set GROQ_API_KEY on the backend."
+            )
+        )
+
+    try:
+
+        return assistant_service.chat(
+            message=request.message,
+            context=request.context.model_dump(
+                mode="python",
+                exclude_none=True
+            ),
+            history=[
+                item.model_dump(
+                    mode="python"
+                )
+                for item in request.history
+            ]
+        )
+
+    except AssistantConfigurationError:
+
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The assistant is not configured. "
+                "Set GROQ_API_KEY on the backend."
+            )
+        )
+
+    except AssistantServiceError:
+
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Groq could not complete the request. "
+                "The deterministic routing endpoints remain "
+                "available."
+            )
+        )

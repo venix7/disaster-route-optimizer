@@ -43,7 +43,9 @@ function ShelterMarkers({ shelters }) {
 
                             <p>
                                 Status: {
-                                    shelter.status
+                                    shelter.is_active
+                                        ? "Active"
+                                        : "Inactive"
                                 }
                             </p>
 

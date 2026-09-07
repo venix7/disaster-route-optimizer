@@ -82,3 +82,22 @@ export const resetDisaster = async () => {
 
     return response.data;
 };
+
+
+export const chatWithAssistant = async (
+    message,
+    context,
+    history
+) => {
+
+    const response = await api.post(
+        "/assistant/chat",
+        {
+            message,
+            context,
+            history
+        }
+    );
+
+    return response.data;
+};
