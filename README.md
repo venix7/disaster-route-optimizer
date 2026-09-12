@@ -1,5 +1,13 @@
 # Disaster Evacuation Route Optimizer
 
+[![CI](https://github.com/venix7/disaster-route-optimizer/actions/workflows/ci.yml/badge.svg)](https://github.com/venix7/disaster-route-optimizer/actions/workflows/ci.yml)
+[![Live Demo](https://img.shields.io/badge/demo-live-brightgreen)](https://disaster-route-optimizer-production.up.railway.app)
+
+**Live demo:** https://disaster-route-optimizer-production.up.railway.app
+
+> Hosted on Railway's free tier — the service sleeps when idle, so the first
+> request after a while may take a few extra seconds to wake it up.
+
 A full-stack disaster-aware evacuation system that calculates safer routes on
 a Manhattan road network, reacts to simulated flooding, recommends reachable
 shelters, and explains deterministic results through a Groq-powered natural
@@ -9,19 +17,53 @@ The language model never calculates a route or invents hazard data. It selects
 tools, receives structured facts from the existing Python services, and turns
 those facts into a readable explanation.
 
-## Project status
+## Contents
 
-| Phase | Capability | Status |
-| --- | --- | --- |
-| 1 | Manhattan road network | Complete |
-| 2 | Road attributes and dynamic costs | Complete |
-| 3 | Custom Dijkstra routing engine | Complete |
-| 4 | Flood simulation and dynamic rerouting | Complete |
-| 5 | FastAPI backend | Complete |
-| 6 | PostgreSQL, PostGIS, shelters, and route history | Complete |
-| 7 | React, Vite, and Leaflet dashboard | Complete |
-| 8 | Groq natural-language interface and deterministic explanations | Complete |
-| 9 | Combined deployment, Neon, Railway, health checks, and CI | Deployment-ready |
+- [Routing engine: custom Dijkstra implementation](#routing-engine-custom-dijkstra-implementation)
+- [Architecture](#architecture)
+- [Main features](#main-features)
+- [Deterministic assistant design](#deterministic-assistant-design)
+- [Technology stack](#technology-stack)
+- [Repository layout](#repository-layout)
+- [Environment variables](#environment-variables)
+- [Fastest local test: one command](#fastest-local-test-one-command)
+- [Separate developer mode](#separate-developer-mode)
+- [Standalone routing demo](#standalone-routing-demo)
+- [API endpoints](#api-endpoints)
+- [Tests and CI](#tests-and-ci)
+- [Production deployment](#production-deployment)
+- [Operational behavior](#operational-behavior)
+- [Security notes](#security-notes)
+
+## Routing engine: custom Dijkstra implementation
+
+[`src/routing/route_engine.py`](src/routing/route_engine.py) hand-implements
+Dijkstra's algorithm with a binary heap (`heapq`), run directly on the
+`networkx.MultiDiGraph` Manhattan road network. It doesn't minimize raw
+distance — it minimizes a per-edge `dynamic_cost` from `CostCalculator`:
+
+```
+dynamic_cost = 0.30 × normalized_distance
+             + 0.25 × normalized_travel_time
+             + 0.10 × traffic_level
+             + 0.35 × risk_level
+```
+
+Because `risk_level` carries the highest weight, the router willingly trades
+extra distance or time for a safer path. It also tracks `(previous_node,
+edge_key)` instead of just the previous node, since a `MultiDiGraph` can have
+several parallel edges between the same intersections, and it skips any edge
+marked `blocked`. Flooding doesn't need a separate "disaster mode" search —
+`FloodSimulator` just raises `risk_level` or sets `blocked` on affected roads,
+`RoadNetwork` recalculates `dynamic_cost` immediately, and the next
+`find_route` call naturally reroutes around it.
+
+Since users click map coordinates rather than graph nodes,
+`find_route_by_coordinates` finds the 5 nearest nodes to each click, runs the
+search above across up to 25 start/destination combinations, keeps the
+cheapest reachable result, and stitches the exact click points onto the ends
+of the path. With a binary heap this runs in standard `O((V + E) log V)`
+time, fast enough to compute fresh on every request with no caching.
 
 ## Architecture
 
@@ -56,7 +98,10 @@ and one public Railway URL.
 
 The assistant has tools for route calculation, shelter recommendation, hazard
 status, route explanation, and shelter explanation. Every tool calls the same
-services used by the standard dashboard controls.
+services used by the standard dashboard controls, and none of them accept
+coordinates from the model directly — they operate only on the start,
+destination, and other selections the user already made on the map. This
+keeps the model from inventing or guessing locations.
 
 ```mermaid
 flowchart TB
@@ -78,13 +123,13 @@ The route cost weights are defined by the existing `CostCalculator`:
 
 ## Technology stack
 
-- Backend: Python, FastAPI, SQLAlchemy, GeoAlchemy2
-- Routing: NetworkX/OSMnx graph data and a custom Dijkstra engine
-- Database: PostgreSQL with PostGIS
-- Assistant: LangChain and Groq
-- Frontend: React, Vite, Axios, Leaflet, React Leaflet
-- Deployment: Docker, Railway, Neon
-- CI: GitHub Actions
+- **Backend:** Python, FastAPI, SQLAlchemy, GeoAlchemy2, psycopg 3
+- **Routing:** NetworkX/OSMnx graph data and a custom Dijkstra engine
+- **Database:** PostgreSQL with PostGIS
+- **Assistant:** LangChain and Groq (`langchain-groq`)
+- **Frontend:** React 19, Vite, Axios, Leaflet, React Leaflet
+- **Deployment:** Docker, Railway, Neon
+- **CI:** GitHub Actions (backend unit tests, frontend lint + build)
 
 ## Repository layout
 
@@ -93,17 +138,18 @@ The route cost weights are defined by the existing `CostCalculator`:
 ├── .github/workflows/ci.yml
 ├── data/manhattan_graph.graphml
 ├── frontend/
-│   ├── src/components/
-│   ├── src/services/api.js
+│   ├── src/components/       # MapView, LocationSelector, AssistantChat, ShelterMarkers
+│   ├── src/services/api.js   # Axios client to the FastAPI backend
 │   └── package.json
 ├── src/
-│   ├── api/
-│   ├── database/
-│   ├── disaster/
-│   ├── graph/
-│   ├── llm/
-│   ├── routing/
-│   └── services/
+│   ├── api/                  # FastAPI app, routes, request/response schemas
+│   ├── database/             # SQLAlchemy models, connection, seeding
+│   ├── disaster/             # Flood simulation logic
+│   ├── graph/                # OSM loading, road network, cost calculator
+│   ├── llm/                  # Groq/LangChain assistant service and tools
+│   ├── routing/              # Custom Dijkstra route engine
+│   ├── services/             # EvacuationService, ShelterService, route analysis
+│   └── main.py                # Standalone CLI demo (see below)
 ├── tests/
 ├── .dockerignore
 ├── .env.example
@@ -196,6 +242,18 @@ npm run dev
 Vite runs at <http://localhost:5173>. Development requests use the local
 FastAPI URL; production requests automatically use the same Railway origin.
 
+## Standalone routing demo
+
+The routing engine, cost calculator, and flood simulator can also be exercised
+without the API, database, or frontend. `src/main.py` loads the Manhattan
+graph, computes a normal route, simulates a flood centered on that route, then
+recomputes and compares the disaster-aware route:
+
+```powershell
+$env:PYTHONPATH="src"
+python -m main
+```
+
 ## API endpoints
 
 | Method | Path | Purpose |
@@ -237,7 +295,8 @@ all checks to pass before automatically deploying that commit.
 
 The finished production topology is one Railway web service connected to one
 Neon PostgreSQL database. There is no separate frontend hosting service and no
-Railway database container to wake manually.
+Railway database container to wake manually. The live instance is at
+<https://disaster-route-optimizer-production.up.railway.app>.
 
 Follow [DEPLOYMENT.md](DEPLOYMENT.md) for the remaining account-level steps:
 push to GitHub, create Neon, connect Railway, add two secrets, enable the health
