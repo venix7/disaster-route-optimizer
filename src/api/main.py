@@ -1,7 +1,15 @@
+import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import (
+    FileResponse,
+    JSONResponse
+)
+from fastapi.staticfiles import StaticFiles
+from sqlalchemy.exc import SQLAlchemyError
 
 from api.schemas import (
     RouteRequest,
@@ -28,7 +36,12 @@ from services.shelter_service import (
     ShelterService
 )
 
-from database.connection import SessionLocal
+from database.connection import (
+    SessionLocal,
+    check_database_connection,
+    engine,
+    wait_for_database
+)
 from database.models import RouteHistory
 from llm.assistant_service import (
     AssistantService,
@@ -50,6 +63,9 @@ async def lifespan(app: FastAPI):
         "\nStarting Disaster Evacuation Route Optimizer API..."
     )
 
+    app.state.ready = False
+
+    wait_for_database()
     initialize_database()
     seed_shelters()
 
@@ -65,9 +81,14 @@ async def lifespan(app: FastAPI):
         )
     )
 
+    app.state.ready = True
+
     print("Evacuation service ready.")
 
     yield
+
+    app.state.ready = False
+    engine.dispose()
 
     print(
         "\nShutting down Disaster Evacuation Route Optimizer API..."
@@ -89,11 +110,27 @@ app = FastAPI(
 # CORS Configuration
 # --------------------------------------------------
 
+default_origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173"
+]
+
+configured_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "ALLOWED_ORIGINS",
+        ""
+    ).split(",")
+    if origin.strip()
+]
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173"
-    ],
+    allow_origins=(
+        default_origins
+        + configured_origins
+    ),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -107,11 +144,41 @@ app.add_middleware(
 @app.get("/health")
 def health_check():
     """
-    Check whether the API is running.
+    Check whether the API and database are ready.
     """
+
+    service_ready = bool(
+        getattr(
+            app.state,
+            "ready",
+            False
+        )
+    )
+
+    if not service_ready:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "starting",
+                "database": "unknown"
+            }
+        )
+
+    try:
+        check_database_connection()
+
+    except SQLAlchemyError:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unhealthy",
+                "database": "unavailable"
+            }
+        )
 
     return {
         "status": "healthy",
+        "database": "connected",
         "service": (
             "Disaster Evacuation Route Optimizer"
         )
@@ -392,3 +459,95 @@ def assistant_chat(
                 "available."
             )
         )
+
+
+# --------------------------------------------------
+# Compiled React Frontend
+# --------------------------------------------------
+
+FRONTEND_DIST_DIR = (
+    Path(__file__).resolve().parents[2]
+    / "frontend"
+    / "dist"
+)
+
+FRONTEND_INDEX_FILE = (
+    FRONTEND_DIST_DIR
+    / "index.html"
+)
+
+
+if FRONTEND_INDEX_FILE.exists():
+
+    frontend_assets = (
+        FRONTEND_DIST_DIR
+        / "assets"
+    )
+
+    if frontend_assets.is_dir():
+        app.mount(
+            "/assets",
+            StaticFiles(
+                directory=frontend_assets
+            ),
+            name="frontend-assets"
+        )
+
+    @app.get(
+        "/",
+        include_in_schema=False
+    )
+    def serve_frontend_index():
+        """Serve the compiled React entry page."""
+
+        return FileResponse(
+            FRONTEND_INDEX_FILE
+        )
+
+    @app.get(
+        "/{requested_path:path}",
+        include_in_schema=False
+    )
+    def serve_frontend_path(
+        requested_path: str
+    ):
+        """Serve a frontend file or fall back to React's entry page."""
+
+        requested_file = (
+            FRONTEND_DIST_DIR
+            / requested_path
+        ).resolve()
+
+        frontend_root = (
+            FRONTEND_DIST_DIR.resolve()
+        )
+
+        if (
+            requested_file.is_file()
+            and frontend_root
+            in requested_file.parents
+        ):
+            return FileResponse(
+                requested_file
+            )
+
+        return FileResponse(
+            FRONTEND_INDEX_FILE
+        )
+
+else:
+
+    @app.get(
+        "/",
+        include_in_schema=False
+    )
+    def api_root():
+        """Describe local API mode when no React build is present."""
+
+        return {
+            "service": (
+                "Disaster Evacuation Route Optimizer"
+            ),
+            "docs": "/docs",
+            "frontend": "Run the Vite development server."
+        }

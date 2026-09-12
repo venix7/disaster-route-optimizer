@@ -2,18 +2,41 @@ services:
   database:
     image: postgis/postgis:16-3.4
 
-    container_name: evacuation_postgres
-
     environment:
       POSTGRES_USER: evacuation_user
       POSTGRES_PASSWORD: evacuation_password
       POSTGRES_DB: evacuation_db
 
     ports:
-      - "5433:5432"
+      - "${POSTGRES_PORT:-5433}:5432"
 
     volumes:
       - postgres_data:/var/lib/postgresql/data
+
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U evacuation_user -d evacuation_db
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  application:
+    build:
+      context: .
+
+    environment:
+      DATABASE_URL: postgresql+psycopg://evacuation_user:evacuation_password@database:5432/evacuation_db
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-openai/gpt-oss-20b}
+      PORT: 8000
+
+    ports:
+      - "${APP_PORT:-8000}:8000"
+
+    depends_on:
+      database:
+        condition: service_healthy
 
 volumes:
   postgres_data:
